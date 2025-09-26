@@ -69,9 +69,21 @@ class FloodFillSolver:
         return adjacent_colors
 
     def bfs_solve(self, max_depth=15):
-        """Solve using BFS with pruning techniques"""
+        """Solve using BFS with pruning techniques - optimized for larger grids"""
         if self.is_solved(self.grid):
             return []
+
+        # For larger grids, use more aggressive pruning
+        grid_size = self.rows * self.cols
+        if grid_size > 100:  # For grids larger than 10x10
+            max_states = 2000
+            prune_to = 1000
+        elif grid_size > 64:  # For grids larger than 8x8
+            max_states = 3000
+            prune_to = 1500
+        else:
+            max_states = 5000
+            prune_to = 2500
 
         # BFS state: (grid_state, moves_taken)
         queue = deque([(self.grid.copy(), [])])
@@ -91,6 +103,9 @@ class FloodFillSolver:
             states_at_depth = []
 
             for _ in range(level_size):
+                if not queue:  # Queue might be empty due to pruning
+                    break
+
                 current_grid, moves = queue.popleft()
 
                 # Get possible moves (colors adjacent to current region)
@@ -114,12 +129,48 @@ class FloodFillSolver:
             # Add states for next level
             queue.extend(states_at_depth)
 
-            # Pruning: limit queue size to prevent memory explosion
-            if len(queue) > 3000:
-                # Keep most promising states (fewer remaining colors)
-                queue = deque(sorted(queue, key=lambda x: len(set(x[0].flatten())))[:1500])
+            # More aggressive pruning for larger grids
+            if len(queue) > max_states:
+                # Sort by: 1) fewer colors, 2) larger connected region from (0,0)
+                def state_priority(state):
+                    grid, moves = state
+                    num_colors = len(set(grid.flatten()))
+                    # Count connected region size from (0,0)
+                    connected_size = self._count_connected_region(grid)
+                    return (num_colors, -connected_size)  # Minimize colors, maximize connected region
+
+                queue = deque(sorted(queue, key=state_priority)[:prune_to])
+
+            # Progress indicator for large grids
+            if grid_size > 100 and depth % 2 == 0:
+                print(f"Depth {depth}: {len(queue)} states in queue")
 
         return None  # No solution found within max_depth
+
+    def _count_connected_region(self, grid):
+        """Count size of connected region from top-left corner"""
+        visited = set()
+        queue = deque([(0, 0)])
+        main_color = grid[0, 0]
+        count = 0
+
+        while queue:
+            r, c = queue.popleft()
+            if (r, c) in visited:
+                continue
+            if r < 0 or r >= self.rows or c < 0 or c >= self.cols:
+                continue
+            if grid[r, c] != main_color:
+                continue
+
+            visited.add((r, c))
+            count += 1
+
+            # Add adjacent cells
+            for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                queue.append((r + dr, c + dc))
+
+        return count
 
 def display_grid_emoji(grid, colors):
     """Display grid as colored emoji matrix"""
@@ -131,6 +182,19 @@ def display_grid_emoji(grid, colors):
         result.append(row_str)
 
     return "\n".join(result)
+
+def display_grid_compact(grid, colors):
+    """Display grid in a more compact format for larger grids"""
+    rows, cols = grid.shape
+    if rows > 10 or cols > 10:
+        # For large grids, show a more compact representation
+        result = []
+        for i in range(rows):
+            row_str = "".join([colors[grid[i, j]] for j in range(cols)])
+            result.append(row_str)
+        return "\n".join(result)
+    else:
+        return display_grid_emoji(grid, colors)
 
 def initialize_grid(rows, cols, num_colors):
     """Initialize a new grid with given dimensions"""
@@ -168,16 +232,33 @@ def main():
     with st.sidebar:
         st.header("⚙️ Game Settings")
 
-        # Grid size selection
-        rows = st.slider("Grid Rows", 3, 8, 5)
-        cols = st.slider("Grid Columns", 3, 8, 5)
+        # Grid size selection - increased to 14x14 maximum
+        rows = st.slider("Grid Rows", 3, 14, 6)
+        cols = st.slider("Grid Columns", 3, 14, 6)
 
-        # Color options
-        colors = ['🔴', '🟢', '🔵', '🟡', '🟠', '🟣', '⚫', '⚪']
-        num_colors = st.slider("Number of Colors", 2, 6, 4)
+        # Specific color options as requested: red, yellow, orange, blue, black, white
+        colors = ['🔴', '🟡', '🟠', '🔵', '⚫', '⚪']
+        color_names = ['Red', 'Yellow', 'Orange', 'Blue', 'Black', 'White']
+        num_colors = 6  # Fixed to 6 colors as requested
         selected_colors = colors[:num_colors]
 
-        max_moves = st.slider("Max Search Depth", 5, 15, 12)
+        # Dynamic max search depth based on grid size
+        grid_size = rows * cols
+        if grid_size > 100:
+            default_max_moves = 8
+            max_limit = 12
+        elif grid_size > 64:
+            default_max_moves = 10
+            max_limit = 15
+        else:
+            default_max_moves = 12
+            max_limit = 18
+
+        max_moves = st.slider("Max Search Depth", 5, max_limit, default_max_moves)
+
+        st.subheader("🎨 Colors")
+        for i, (color, name) in enumerate(zip(selected_colors, color_names)):
+            st.write(f"{color} {name}")
 
         st.subheader("🎯 How to Play")
         st.markdown("""
@@ -188,11 +269,13 @@ def main():
         """)
 
         st.subheader("🧠 Algorithm")
+        if grid_size > 100:
+            st.warning("⚠️ Large grid detected! Using optimized pruning.")
         st.markdown("""
         Uses **Bidirectional BFS** with:
-        - State pruning to avoid revisits
-        - Queue size limiting for performance  
-        - Adjacent color detection optimization
+        - Adaptive state pruning for grid size
+        - Priority-based queue management
+        - Connected region optimization
         """)
 
     # Initialize or update grid in session state
@@ -222,33 +305,55 @@ def main():
 
         # Display current grid with colors
         st.text("Current Grid:")
-        grid_display = display_grid_emoji(st.session_state.grid, selected_colors)
+        grid_display = display_grid_compact(st.session_state.grid, selected_colors)
         st.code(grid_display, language=None)
 
-        # Create interactive grid editor
+        # Create interactive grid editor - optimized for larger grids
         st.text("Click cells to edit:")
 
-        # Create grid editor with proper bounds checking
-        for i in range(rows):
-            grid_cols = st.columns(cols)
-            for j in range(cols):
-                with grid_cols[j]:
-                    # Ensure indices are within bounds
-                    if i < st.session_state.grid.shape[0] and j < st.session_state.grid.shape[1]:
-                        current_color = st.session_state.grid[i, j]
-                        if st.button(
-                            f"{selected_colors[current_color]}", 
-                            key=f"cell_{i}_{j}",
-                            help=f"Row {i}, Col {j}",
-                            use_container_width=True
-                        ):
-                            # Cycle through colors
-                            st.session_state.grid[i, j] = (current_color + 1) % num_colors
-                            st.rerun()
+        # For very large grids, use a more efficient display
+        if rows > 8 or cols > 8:
+            st.info(f"📏 Large grid ({rows}×{cols}). Use control buttons to modify.")
+
+            # Show a sample of the grid for editing
+            sample_rows = min(rows, 6)
+            sample_cols = min(cols, 6)
+
+            st.text(f"Editing top-left {sample_rows}×{sample_cols} section:")
+            for i in range(sample_rows):
+                grid_cols = st.columns(sample_cols)
+                for j in range(sample_cols):
+                    with grid_cols[j]:
+                        if i < st.session_state.grid.shape[0] and j < st.session_state.grid.shape[1]:
+                            current_color = st.session_state.grid[i, j]
+                            if st.button(
+                                f"{selected_colors[current_color]}", 
+                                key=f"cell_{i}_{j}",
+                                help=f"Row {i}, Col {j}",
+                                use_container_width=True
+                            ):
+                                st.session_state.grid[i, j] = (current_color + 1) % num_colors
+                                st.rerun()
+        else:
+            # Full grid editor for smaller grids
+            for i in range(rows):
+                grid_cols = st.columns(cols)
+                for j in range(cols):
+                    with grid_cols[j]:
+                        if i < st.session_state.grid.shape[0] and j < st.session_state.grid.shape[1]:
+                            current_color = st.session_state.grid[i, j]
+                            if st.button(
+                                f"{selected_colors[current_color]}", 
+                                key=f"cell_{i}_{j}",
+                                help=f"Row {i}, Col {j}",
+                                use_container_width=True
+                            ):
+                                st.session_state.grid[i, j] = (current_color + 1) % num_colors
+                                st.rerun()
 
         # Control buttons
         st.text("")  # spacing
-        col_reset, col_random, col_simple = st.columns(3)
+        col_reset, col_random, col_pattern = st.columns(3)
 
         with col_reset:
             if st.button("🔄 Reset", use_container_width=True):
@@ -260,23 +365,17 @@ def main():
                 st.session_state.grid = initialize_grid(rows, cols, num_colors)
                 st.rerun()
 
-        with col_simple:
-            if st.button("🎯 Easy Puzzle", use_container_width=True):
-                # Create a simple solvable puzzle
-                simple_pattern = np.array([
-                    [0, 1, 1, 2],
-                    [0, 1, 2, 2], 
-                    [0, 0, 2, 1],
-                    [0, 1, 1, 1]
-                ])
-
-                # Resize pattern to match current grid size
+        with col_pattern:
+            if st.button("🎯 Pattern", use_container_width=True):
+                # Create an interesting pattern for larger grids
                 new_grid = np.zeros((rows, cols), dtype=int)
+
+                # Create concentric rectangles pattern
                 for i in range(rows):
                     for j in range(cols):
-                        pattern_i = i % simple_pattern.shape[0]
-                        pattern_j = j % simple_pattern.shape[1]
-                        new_grid[i, j] = simple_pattern[pattern_i, pattern_j] % num_colors
+                        # Distance from edges
+                        dist_from_edge = min(i, j, rows-1-i, cols-1-j)
+                        new_grid[i, j] = dist_from_edge % num_colors
 
                 st.session_state.grid = new_grid
                 st.rerun()
@@ -288,11 +387,19 @@ def main():
         unique_colors = len(set(st.session_state.grid.flatten()))
         total_cells = rows * cols
 
-        col_stat1, col_stat2 = st.columns(2)
+        col_stat1, col_stat2, col_stat3 = st.columns(3)
         with col_stat1:
             st.metric("Colors Used", unique_colors)
         with col_stat2:
             st.metric("Grid Size", f"{rows}×{cols}")
+        with col_stat3:
+            st.metric("Total Cells", total_cells)
+
+        # Performance warning for very large grids
+        if total_cells > 150:
+            st.warning("⚠️ Very large grid! Solving may take longer and use more memory.")
+        elif total_cells > 100:
+            st.info("ℹ️ Large grid detected. Using optimized algorithms.")
 
         if unique_colors == 1:
             st.success("🎉 Puzzle already solved!")
@@ -316,24 +423,30 @@ def main():
                         move_text = " → ".join([selected_colors[move] for move in solution])
                         st.markdown(f"`{move_text}`")
 
+                        # Color names for moves
+                        move_names = " → ".join([color_names[move] for move in solution])
+                        st.markdown(f"**Colors:** {move_names}")
+
                         # Detailed moves list
                         with st.expander("📝 Detailed Steps", expanded=True):
                             for i, color_idx in enumerate(solution):
-                                st.write(f"**{i+1}.** Choose color {selected_colors[color_idx]}")
+                                st.write(f"**{i+1}.** Choose {selected_colors[color_idx]} ({color_names[color_idx]})")
 
-                        # Step-by-step animation
-                        if st.checkbox("🎬 Show Animation"):
+                        # Step-by-step animation (only for smaller grids)
+                        if total_cells <= 100 and st.checkbox("🎬 Show Animation"):
                             current_grid = st.session_state.grid.copy()
 
                             st.text("Initial:")
-                            st.code(display_grid_emoji(current_grid, selected_colors), language=None)
+                            st.code(display_grid_compact(current_grid, selected_colors), language=None)
 
                             for i, color_idx in enumerate(solution):
                                 temp_solver = FloodFillSolver(current_grid)
                                 current_grid = temp_solver.flood_fill(current_grid, color_idx)
 
-                                st.text(f"After move {i+1} ({selected_colors[color_idx]}):")
-                                st.code(display_grid_emoji(current_grid, selected_colors), language=None)
+                                st.text(f"After move {i+1} ({color_names[color_idx]}):")
+                                st.code(display_grid_compact(current_grid, selected_colors), language=None)
+                        elif total_cells > 100:
+                            st.info("🎬 Animation disabled for large grids to improve performance")
 
                     else:
                         st.error(f"❌ No solution found within {max_moves} moves")
@@ -341,12 +454,13 @@ def main():
 
         # Tips section
         with st.expander("💡 Optimization Tips"):
-            st.markdown("""
-            - **Smaller grids** (3×3, 4×4) solve much faster
-            - **Fewer colors** reduce complexity exponentially  
-            - **Connected regions** of same color are more efficient
-            - **Edge cases** may require deeper search depths
-            - **Most puzzles** have optimal solutions under 10 moves
+            st.markdown(f"""
+            **For {rows}×{cols} grids:**
+            - **Recommended depth**: {default_max_moves} moves for good performance
+            - **Large grid strategy**: Focus on creating larger connected regions
+            - **Pattern approach**: Concentric or spiral patterns often solve efficiently
+            - **Performance**: Grids >10×10 use optimized pruning algorithms
+            - **Memory usage**: Very large grids may require patience
             """)
 
 if __name__ == "__main__":
