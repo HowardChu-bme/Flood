@@ -132,6 +132,28 @@ def display_grid_emoji(grid, colors):
 
     return "\n".join(result)
 
+def initialize_grid(rows, cols, num_colors):
+    """Initialize a new grid with given dimensions"""
+    return np.random.choice(range(num_colors), (rows, cols))
+
+def resize_grid(current_grid, new_rows, new_cols, num_colors):
+    """Resize existing grid to new dimensions, preserving data where possible"""
+    old_rows, old_cols = current_grid.shape
+
+    # Create new grid with random values
+    new_grid = np.random.choice(range(num_colors), (new_rows, new_cols))
+
+    # Copy existing data where dimensions overlap
+    copy_rows = min(old_rows, new_rows)
+    copy_cols = min(old_cols, new_cols)
+
+    new_grid[:copy_rows, :copy_cols] = current_grid[:copy_rows, :copy_cols]
+
+    # Ensure all values are within the new color range
+    new_grid = new_grid % num_colors
+
+    return new_grid
+
 def main():
     st.set_page_config(
         page_title="Flood Fill Optimizer", 
@@ -173,18 +195,24 @@ def main():
         - Adjacent color detection optimization
         """)
 
-    # Initialize grid in session state
-    if 'grid' not in st.session_state or st.session_state.get('grid_size') != (rows, cols):
-        st.session_state.grid = np.random.choice(range(num_colors), (rows, cols))
-        st.session_state.grid_size = (rows, cols)
+    # Initialize or update grid in session state
+    current_dimensions = (rows, cols)
+
+    # Initialize grid if not exists
+    if 'grid' not in st.session_state:
+        st.session_state.grid = initialize_grid(rows, cols, num_colors)
+        st.session_state.grid_size = current_dimensions
         st.session_state.num_colors = num_colors
 
-    # Update grid if number of colors changed
-    if st.session_state.get('num_colors') != num_colors:
+    # Handle dimension changes
+    elif st.session_state.get('grid_size') != current_dimensions:
+        st.session_state.grid = resize_grid(st.session_state.grid, rows, cols, num_colors)
+        st.session_state.grid_size = current_dimensions
+
+    # Handle color count changes
+    elif st.session_state.get('num_colors') != num_colors:
         # Remap existing colors to new range
-        max_val = st.session_state.grid.max()
-        if max_val >= num_colors:
-            st.session_state.grid = st.session_state.grid % num_colors
+        st.session_state.grid = st.session_state.grid % num_colors
         st.session_state.num_colors = num_colors
 
     col1, col2 = st.columns([1.2, 1])
@@ -200,23 +228,23 @@ def main():
         # Create interactive grid editor
         st.text("Click cells to edit:")
 
-        # Create a more compact grid editor
-        grid_cols = st.columns(cols)
-
-        for j in range(cols):
-            with grid_cols[j]:
-                st.text(f"Col {j}")
-                for i in range(rows):
-                    current_color = st.session_state.grid[i, j]
-                    if st.button(
-                        f"{selected_colors[current_color]}", 
-                        key=f"cell_{i}_{j}",
-                        help=f"Row {i}, Col {j}",
-                        use_container_width=True
-                    ):
-                        # Cycle through colors
-                        st.session_state.grid[i, j] = (current_color + 1) % num_colors
-                        st.rerun()
+        # Create grid editor with proper bounds checking
+        for i in range(rows):
+            grid_cols = st.columns(cols)
+            for j in range(cols):
+                with grid_cols[j]:
+                    # Ensure indices are within bounds
+                    if i < st.session_state.grid.shape[0] and j < st.session_state.grid.shape[1]:
+                        current_color = st.session_state.grid[i, j]
+                        if st.button(
+                            f"{selected_colors[current_color]}", 
+                            key=f"cell_{i}_{j}",
+                            help=f"Row {i}, Col {j}",
+                            use_container_width=True
+                        ):
+                            # Cycle through colors
+                            st.session_state.grid[i, j] = (current_color + 1) % num_colors
+                            st.rerun()
 
         # Control buttons
         st.text("")  # spacing
@@ -229,19 +257,28 @@ def main():
 
         with col_random:
             if st.button("🎲 Random", use_container_width=True):
-                st.session_state.grid = np.random.choice(range(num_colors), (rows, cols))
+                st.session_state.grid = initialize_grid(rows, cols, num_colors)
                 st.rerun()
 
         with col_simple:
             if st.button("🎯 Easy Puzzle", use_container_width=True):
                 # Create a simple solvable puzzle
-                simple_grid = np.array([
+                simple_pattern = np.array([
                     [0, 1, 1, 2],
                     [0, 1, 2, 2], 
                     [0, 0, 2, 1],
                     [0, 1, 1, 1]
-                ])[:rows, :cols] % num_colors
-                st.session_state.grid = simple_grid
+                ])
+
+                # Resize pattern to match current grid size
+                new_grid = np.zeros((rows, cols), dtype=int)
+                for i in range(rows):
+                    for j in range(cols):
+                        pattern_i = i % simple_pattern.shape[0]
+                        pattern_j = j % simple_pattern.shape[1]
+                        new_grid[i, j] = simple_pattern[pattern_i, pattern_j] % num_colors
+
+                st.session_state.grid = new_grid
                 st.rerun()
 
     with col2:
